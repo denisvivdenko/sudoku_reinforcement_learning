@@ -1,6 +1,12 @@
 from collections import namedtuple
+from distutils.log import Log
 from enum import Enum
+import os
+
 import numpy as np
+
+from src.logger import Logger
+
 
 class RuleViolation(Exception):
     """Base class for other rule violation exceptions."""
@@ -59,7 +65,9 @@ class Sudoku:
     
     def is_solved(self) -> bool:
         """If sudoku pazzle is solved returns True."""
-        pass
+        if np.isin(0, self.sudoku_matrix):
+            return False
+        return True
 
     def _line_contains_value(self, value: int, cell: Cell, axis: Axis) -> bool:
         """
