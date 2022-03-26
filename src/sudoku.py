@@ -1,13 +1,9 @@
 from collections import namedtuple
-from distutils.log import Log
 from enum import Enum
-import os
-from tkinter import HORIZONTAL
 
 import numpy as np
 
 from src.logger import Logger
-
 
 class RuleViolationError(Exception):
     """Base class for other rule violation exceptions."""
@@ -42,6 +38,7 @@ class Sudoku:
             sudoku_matrix (np.array): matrix (n x n) cells with (m x m) squares.
                 cell can contain numbers [1;9] and 0 if it is empty.  
         """
+        self._cells_per_square: int = 3
         self._sudoku_matrix: np.array = sudoku_matrix
 
     def insert_value(self, value: int, cell: Cell) -> None:
@@ -59,9 +56,9 @@ class Sudoku:
             raise HorizontalLineContainsValueError()
         elif self._line_contains_value(value, cell, Axis.VERTICAL):
             raise VerticalLineContainsValueError()
-        elif self._square_contains_value(value, self._convert_cell_to_square_cell(cell)):
+        elif self._square_contains_value(value, self._get_left_upper_cell_of_square(cell)):
             raise SquareContainsValueError()
-        self.sudoku_matrix[cell.row, cell.column] = value
+        self._sudoku_matrix[cell.row, cell.column] = value
     
     def is_solved(self) -> bool:
         """If sudoku pazzle is solved returns True."""
@@ -86,21 +83,18 @@ class Sudoku:
                 return True
         return False
 
-    def _convert_cell_to_square_cell(self, cell) -> int:
-        """
-            +-----------+
-            | 1 | 2 | 3 |
-            +---+---+---+
-            |4  |5  | 6 |
-            +---+---+---+
-            | 7 | 8 | 9 |
-            +---+---+---+
-        """
-        pass
+    def _get_left_upper_cell_of_square(self, cell) -> int:
+        row_index = cell.row - (cell.row % self._cells_per_square)
+        column_index = cell.column - (cell.column % self._cells_per_square)
+        return Cell(row_index, column_index)
 
-    def _square_contains_value(self, value: int, square_cell: Cell) -> bool:
+    def _square_contains_value(self, value: int, left_upper_cell: Cell) -> bool:
         """
         If square contains given value the returns True.
         """
-        pass
-
+        for row_index in range(self._cells_per_square):
+            for column_index in range(self._cells_per_square):
+                if value == self._sudoku_matrix[left_upper_cell.row + row_index, left_upper_cell.column + column_index]: 
+                    return True
+        return False
+            
