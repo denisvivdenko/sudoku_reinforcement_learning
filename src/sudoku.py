@@ -52,9 +52,12 @@ class Sudoku:
         """Returns cells with zero values."""
         return [Cell(*cell_indices) for cell_indices in zip(*np.where(self._sudoku_matrix == 0))]
 
-    def reset_sudoku(self) -> None:
-        """Resets current solution."""
-        self._sudoku_matrix = np.copy(self._essential_sudoku_matrix)
+    def reset_sudoku(self):
+        """
+        Resets current solution.
+        Returns itself.
+        """
+        return Sudoku(np.copy(self._essential_sudoku_matrix))
 
     def insert_value(self, value: int, cell: Cell) -> None:
         """
