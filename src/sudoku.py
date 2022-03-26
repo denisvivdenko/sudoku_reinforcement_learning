@@ -3,8 +3,6 @@ from enum import Enum
 
 import numpy as np
 
-from src.logger import Logger
-
 class RuleViolationError(Exception):
     """Base class for other rule violation exceptions."""
     pass
@@ -95,4 +93,7 @@ class Sudoku:
                 if value == self._sudoku_matrix[left_upper_cell.row + row_index, left_upper_cell.column + column_index]: 
                     return True
         return False
+
+    def __str__(self) -> str:
+        return str(self._sudoku_matrix)
             
