@@ -1,5 +1,7 @@
 from collections import namedtuple
 from enum import Enum
+from functools import cached_property
+from typing import List, Tuple
 
 import numpy as np
 
@@ -37,7 +39,22 @@ class Sudoku:
                 cell can contain numbers [1;9] and 0 if it is empty.  
         """
         self._cells_per_square: int = 3
-        self._sudoku_matrix: np.array = sudoku_matrix
+        self._essential_sudoku_matrix: np.array = np.copy(sudoku_matrix)
+        self._sudoku_matrix: np.array = np.copy(sudoku_matrix)
+
+    @cached_property
+    def shape(self) -> Tuple[int, int]:
+        """Returns sudoku shape, for example (9, 9)."""
+        return self._sudoku_matrix.shape
+
+    @cached_property
+    def empty_cells(self) -> List[Cell]:
+        """Returns cells with zero values."""
+        return [Cell(*cell_indices) for cell_indices in zip(*np.where(self._sudoku_matrix == 0))]
+
+    def reset_sudoku(self) -> None:
+        """Resets current solution."""
+        self._sudoku_matrix = np.copy(self._essential_sudoku_matrix)
 
     def insert_value(self, value: int, cell: Cell) -> None:
         """

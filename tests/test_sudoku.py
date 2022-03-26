@@ -79,3 +79,25 @@ def test_cell_already_inserted() -> None:
     cell = Cell(row=0, column=1)
     with pytest.raises(CellHasValueError):
         sudoku.insert_value(value=6, cell=cell)
+
+def test_empty_cells_property_passed() -> None:
+    matrix = np.array([
+        [0, 1, 2],
+        [0, 4, 5],
+        [6, 7, 0]
+    ])
+    sudoku = Sudoku(matrix)
+    expected = [Cell(0, 0), Cell(1, 0), Cell(2, 2)]
+    actual = sudoku.empty_cells
+    assert expected == actual
+
+def test_empty_cells_property_failed() -> None:
+    matrix = np.array([
+        [0, 1, 2],
+        [0, 4, 5],
+        [6, 7, 0]
+    ])
+    sudoku = Sudoku(matrix)
+    expected = [Cell(1, 0), Cell(1, 0), Cell(2, 2)]
+    actual = sudoku.empty_cells
+    assert expected != actual
