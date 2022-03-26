@@ -89,9 +89,7 @@ class Sudoku:
         return Cell(row_index, column_index)
 
     def _square_contains_value(self, value: int, left_upper_cell: Cell) -> bool:
-        """
-        If square contains given value the returns True.
-        """
+        """If square contains given value the returns True."""
         for row_index in range(self._cells_per_square):
             for column_index in range(self._cells_per_square):
                 if value == self._sudoku_matrix[left_upper_cell.row + row_index, left_upper_cell.column + column_index]: 

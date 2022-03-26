@@ -1,9 +1,8 @@
 import pytest
 import numpy as np
 
-from src.sudoku import CellHasValueError, SquareContainsValueError, Sudoku
-from src.sudoku import Cell
-from src.sudoku import HorizontalLineContainsValueError, VerticalLineContainsValueError, SquareContainsValueError
+from src.sudoku import Sudoku, Cell
+from src.sudoku import HorizontalLineContainsValueError, VerticalLineContainsValueError, SquareContainsValueError, CellHasValueError, SquareContainsValueError
 
 def test_sudoku_is_solved_false() -> None:
     matrix = np.array([
@@ -69,3 +68,14 @@ def test_sudoku_successfuly_insert_value() -> None:
     cell = Cell(row=0, column=3)
     sudoku = Sudoku(matrix)
     sudoku.insert_value(value=9, cell=cell)
+
+def test_cell_already_inserted() -> None:
+    matrix = np.array([
+        [0, 1, 2],
+        [0, 4, 5],
+        [6, 7, 8]
+    ])
+    sudoku = Sudoku(matrix)
+    cell = Cell(row=0, column=1)
+    with pytest.raises(CellHasValueError):
+        sudoku.insert_value(value=6, cell=cell)
