@@ -47,7 +47,7 @@ class Sudoku:
         """Returns sudoku shape, for example (9, 9)."""
         return self._sudoku_matrix.shape
 
-    @cached_property
+    @property
     def empty_cells(self) -> List[Cell]:
         """Returns cells with zero values."""
         return [Cell(*cell_indices) for cell_indices in zip(*np.where(self._sudoku_matrix == 0))]
