@@ -23,22 +23,27 @@ class SudokuSolver:
         self._epochs = multiprocessing.Value('i', 0)
         self._solving_stage = None
 
-    def solve_task(self, max_time: int) -> Sudoku:
+    def solve_task(self, max_time: int = 1000) -> Sudoku:
         start_time = time.time()
         training_step_index = 0
         kpi_thresholds = []
         models: List[DecisionTreeRegressor] = []
         while time.time() - start_time < max_time:
-            generated_plans = self._stochastic_plan_generator(models=[], processing_time=100, max_plan_len=10, n_cores=os.cpu_count())
+            generated_plans = self._stochastic_plan_generator(models=models, processing_time=100, max_plan_len=10, n_cores=os.cpu_count())
             evaluated_plans = set([tuple(self._evaluate_plan(plan, self._sudoku.reset_sudoku())) for plan, _ in tqdm(generated_plans.items())])
             current_step_kpi = self._calculate_step_kpi(training_step_index, evaluated_plans)
             kpi_thresholds.append(self._calculate_kpi_threshold(current_step_kpi))
-            
-
+            models.append(self._train_model(current_step_kpi))
             training_step_index += 1
             Logger().debug(f"Evaluated plans: {len(evaluated_plans)}")
             Logger().debug(f"Generated plans number: {len(generated_plans)}")
             Logger().debug(f"KPI: {current_step_kpi}")
+
+    def _train_model(self, kpi: Dict[int, int]) -> DecisionTreeRegressor:
+        X_train, y_train = kpi.keys(), kpi.values()
+        model = DecisionTreeRegressor(max_depth=5)
+        model.fit(X_train, y_train)
+        return model
 
     def _calculate_step_kpi(self, training_step_index: int, plans: Set[int]) -> Dict[int, int]:
         kpi = {step_value: 0 for step_value in range(1, 9)}
@@ -46,7 +51,7 @@ class SudokuSolver:
             if not plan: continue
             step_value = plan[training_step_index]
             plan = plan[training_step_index:]
-            kpi[step_value] = kpi.get(step_value, 0) + (1 + len(plan)) * len(plan) / 2
+            kpi[step_value] = kpi[step_value] + (1 + len(plan)) * len(plan) / 2
         return kpi
 
     def _calculate_kpi_threshold(self, kpi: Dict[int, int], bias_coefficient: float = 1.2) -> None:
