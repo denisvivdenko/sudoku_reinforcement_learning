@@ -6,6 +6,7 @@ from typing import Dict, List, Set, Tuple
 
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.tree import DecisionTreeRegressor
 from tqdm import tqdm
 
 from src.logger import Logger
@@ -22,22 +23,35 @@ class SudokuSolver:
         self._epochs = multiprocessing.Value('i', 0)
         self._solving_stage = None
 
-    def solve_task(self) -> Sudoku:
-        self._solving_stage = SolvingStage.DATA_COLLECTION
-        generated_plans = self._stochastic_plan_generator(models=[], processing_time=10, max_plan_len=1000, n_cores=os.cpu_count())
-        Logger().debug(f"Generated plans number: {len(generated_plans)}")
-        evaluated_plans = set([tuple(self._evaluate_plan(plan, self._sudoku.reset_sudoku())) for plan, _ in tqdm(generated_plans.items())])
-        Logger().debug(f"Evaluated plans: {len(evaluated_plans)}")
-        kpi = self._calculate_kpi(evaluated_plans)
-        Logger().debug(f"KPI: {kpi}")
+    def solve_task(self, max_time: int) -> Sudoku:
+        start_time = time.time()
+        training_step_index = 0
+        kpi_thresholds = []
+        models: List[DecisionTreeRegressor] = []
+        while time.time() - start_time < max_time:
+            generated_plans = self._stochastic_plan_generator(models=[], processing_time=100, max_plan_len=10, n_cores=os.cpu_count())
+            evaluated_plans = set([tuple(self._evaluate_plan(plan, self._sudoku.reset_sudoku())) for plan, _ in tqdm(generated_plans.items())])
+            current_step_kpi = self._calculate_step_kpi(training_step_index, evaluated_plans)
+            kpi_thresholds.append(self._calculate_kpi_threshold(current_step_kpi))
+            
 
-    def _calculate_kpi(self, plans: Set[int]) -> Dict[int, int]:
-        kpi = dict()
+            training_step_index += 1
+            Logger().debug(f"Evaluated plans: {len(evaluated_plans)}")
+            Logger().debug(f"Generated plans number: {len(generated_plans)}")
+            Logger().debug(f"KPI: {current_step_kpi}")
+
+    def _calculate_step_kpi(self, training_step_index: int, plans: Set[int]) -> Dict[int, int]:
+        kpi = {step_value: 0 for step_value in range(1, 9)}
         for plan in plans:
-            if not plan:
-                continue
-            kpi[plan[0]] = kpi.get(plan[0], 0) + (1 + len(plan)) * len(plan) / 2
+            if not plan: continue
+            step_value = plan[training_step_index]
+            plan = plan[training_step_index:]
+            kpi[step_value] = kpi.get(step_value, 0) + (1 + len(plan)) * len(plan) / 2
         return kpi
+
+    def _calculate_kpi_threshold(self, kpi: Dict[int, int], bias_coefficient: float = 1.2) -> None:
+        non_zero_kpi = [value for value in kpi.values() if value > 0]
+        return np.mean(non_zero_kpi) * bias_coefficient
 
     def _stochastic_plan_generator(self, models: List[RandomForestClassifier], processing_time: int, max_plan_len: int, n_cores: int = 1) -> Dict[Tuple[int], int]:
         def start_generating_process(time: int, process_id: int, return_dict: dict) -> List[int]:
