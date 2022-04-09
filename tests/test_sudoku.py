@@ -1,6 +1,7 @@
 import pytest
 import numpy as np
-
+import pandas as pd
+from src.data_pipeline import parse_puzzle_clauses
 from src.sudoku import Sudoku, Cell
 from src.sudoku import HorizontalLineContainsValueError, VerticalLineContainsValueError, SquareContainsValueError, CellHasValueError, SquareContainsValueError
 
@@ -101,3 +102,33 @@ def test_empty_cells_property_failed() -> None:
     expected = [Cell(1, 0), Cell(1, 0), Cell(2, 2)]
     actual = sudoku.empty_cells
     assert expected != actual
+
+def test_sudoku() -> None:
+    data = pd.read_csv("tests/data.csv")
+    sudoku = Sudoku(parse_puzzle_clauses.fit_transform(data["puzzle"])[0])
+    plan = [6, 9, 5, 1, 8, 2, 5, 3, 7, 2]
+    for value, empty_cell in zip(plan, sudoku.empty_cells):
+        sudoku.insert_value(value=value, cell=empty_cell)
+
+def test_reset_sudoku_passed() -> None:
+    matrix = np.array([
+        [0, 1, 2],
+        [0, 4, 5],
+        [6, 7, 8]
+    ])
+    sudoku = Sudoku(matrix)
+    cell = Cell(row=0, column=0)
+    sudoku.insert_value(value=9, cell=cell)
+    sudoku = sudoku.reset_sudoku()
+    assert np.all(sudoku._sudoku_matrix == matrix)
+
+def test_reset_sudoku_failed() -> None:
+    matrix = np.array([
+        [0, 1, 2],
+        [0, 4, 5],
+        [6, 7, 8]
+    ])
+    sudoku = Sudoku(matrix)
+    cell = Cell(row=0, column=0)
+    sudoku.insert_value(value=9, cell=cell)
+    assert not np.all(sudoku._sudoku_matrix == matrix)
