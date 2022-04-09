@@ -1,7 +1,8 @@
 from enum import Enum
 import multiprocessing
+from platform import processor
 import time
-from typing import List
+from typing import Dict, List, Set, Tuple
 
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
@@ -11,8 +12,8 @@ from src.sudoku import Cell, RuleViolationError, Sudoku
 
 
 class SolvingStage(Enum):
-    DATA_COLLECTION: int
-    TRAINING_MODELS: int
+    DATA_COLLECTION = 1
+    TRAINING_MODELS = 2
 
 class SudokuSolver:
     def __init__(self, sudoku: Sudoku) -> None:
@@ -22,46 +23,43 @@ class SudokuSolver:
 
     def solve_task(self) -> Sudoku:
         self._solving_stage = SolvingStage.DATA_COLLECTION
-        
+        generated_plans = self._stochastic_plan_generator(models=[], processing_time=400, n_cores=4)
+        Logger().debug(generated_plans)
+        evaluated_plans = set([tuple(self._evaluate_plan(plan, self._sudoku)) for plan, _ in generated_plans.items()])
+        Logger().debug(f"Evaluated plans: {evaluated_plans}")
 
-    def _stochastic_search(self, models: List[RandomForestClassifier], time: int, n_cores: int = 1) -> None:
-        """Searches for the solution."""
-        def _start_searching_process(max_solving_time: int, process_id: int, return_dict: dict) -> List[int]:
-            evaluated_plans = []
+    def _stochastic_plan_generator(self, models: List[RandomForestClassifier], processing_time: int, n_cores: int = 1) -> Dict[Tuple[int], int]:
+        def start_generating_process(time: int, process_id: int, return_dict: dict) -> List[int]:
             start_time = time.time()
-            while time.time() - start_time < max_solving_time:
-                plan = self._generate_plan()
-                evaluated_plan = self._evaluate_plan(plan, self._sudoku)
-                evaluated_plans.append(evaluated_plan)
-                self._epochs.value += 1
-                Logger().debug(f"PID: {process_id} EPOCHS: {self._epochs.value}")
-                if len(evaluated_plan) == len(self._sudoku.empty_cells):
-                    return_dict[process_id] = evaluated_plan
-                    return evaluated_plan
+            while time.time() - start_time < processing_time:
+                plan = tuple(self._generate_plan(models=models, significance_level=None, sudoku=self._sudoku))
+                return_dict[plan] = return_dict.get(plan, 0) + 1
 
         manager = multiprocessing.Manager()
-        return_dict = manager.dict()
+        return_dict = manager.dict()  # Key is plan (tuple) and value is counter of generated plans.
         processes = list()
         for core in range(n_cores):
-            process = multiprocessing.Process(target=_start_searching_process, args=(max_solving_time, core, return_dict))
+            process = multiprocessing.Process(target=start_generating_process, args=(time, core, return_dict))
             processes.append(process)
             process.start()
+        [process.join() for process in processes]
+        return return_dict
     
     def _generate_plan(self, models: List[RandomForestClassifier], significance_level: List[float], sudoku: Sudoku) -> List[int]:
         """Generates plan list which contains numbers in a certain order."""
         plan = list()
-        for step in range(len(sudoku.empty_cells)):
+        for step, _ in enumerate(sudoku.empty_cells):
             possible_values = np.arange(1, 10)
-            if models[step]:
+            try:
                 right_step_probabilities = models[step].predict_proba(possible_values.reshape(9, 1))
                 if any(right_step_probabilities >= significance_level[step]):
                     predicted_steps = possible_values[right_step_probabilities.flatten() >= significance_level[step]]
                     plan.append(np.random.choice(predicted_steps))
                 else:
                     plan.append(np.random.choice(possible_values))
-            else:
+            except IndexError:
                 plan.append(np.random.choice(possible_values))
-                    
+        return plan
 
     def _evaluate_plan(self, plan: List[int], sudoku: Sudoku) -> List[int]:
         """
