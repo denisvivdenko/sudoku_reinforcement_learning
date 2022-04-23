@@ -25,41 +25,47 @@ class SudokuSolver:
         self._solving_stage = None
 
     def solve_task(self, max_time: int = 1000) -> Sudoku:
+        # [6 9 5 1 8 2 5 3 7 2 8 2 1 5 7 7 3 1 8 6 1 7 9 2 1 6 9 7 4 4 5 2 6 3 6 8 3 4 7 1 3 9 5 6]
         start_time = time.time()
         training_step_index = 0
-        kpi_thresholds = []
+        kpi_thresholds = np.array([])
         models: List[DecisionTreeRegressor] = []
-        generating_time = 10
-        max_plan_length = 1000
+        generating_time = 20
+        max_plan_length = 2
         while time.time() - start_time < max_time:
             Logger().debug(f"Epoh: {training_step_index + 1}")
             generated_plans = self._stochastic_plan_generator(models=models, kpi_thresholds=kpi_thresholds, processing_time=generating_time, max_plan_len=max_plan_length, n_cores=os.cpu_count())
             evaluated_plans = set([tuple(self._evaluate_plan(plan, self._sudoku.reset_sudoku())) for plan, _ in tqdm(generated_plans.items())])
             current_step_kpi = self._calculate_step_kpi(training_step_index, evaluated_plans)
-            while not self._is_kpi_detected(current_step_kpi, kpi_threshold=50):
+            while not self._is_kpi_detected(current_step_kpi, kpi_threshold=0):
                 Logger().debug(f"Kpi is not detected. Collecting more data.")
-                generated_plans = self._stochastic_plan_generator(models=models[:-2], kpi_thresholds=kpi_thresholds, processing_time=generating_time, max_plan_len=max_plan_length, n_cores=os.cpu_count())
+                # kpi_thresholds *= 0.9
+                generated_plans = self._stochastic_plan_generator(models=models, kpi_thresholds=kpi_thresholds, processing_time=generating_time, max_plan_len=max_plan_length, n_cores=os.cpu_count())
                 evaluated_plans = evaluated_plans.union(set([tuple(self._evaluate_plan(plan, self._sudoku.reset_sudoku())) for plan, _ in tqdm(generated_plans.items())]))
                 current_step_kpi = self._calculate_step_kpi(training_step_index, evaluated_plans)
                 Logger().debug(f"Current kpi: {current_step_kpi}")
-                Logger().debug(f"Plans: {evaluated_plans}")
+                Logger().debug(f"Kpi threshold: {kpi_thresholds}")
+                Logger().debug(f"Plans: {[plan for plan in evaluated_plans if len(plan) > training_step_index]}")
 
-            kpi_thresholds.append(self._calculate_kpi_threshold(current_step_kpi, bias_coefficient=0.8))
+            # kpi_thresholds = np.append(kpi_thresholds, self._calculate_kpi_threshold(current_step_kpi, bias_coefficient=0.6))
+            kpi_thresholds = np.append(kpi_thresholds, 0)
             models.append(self._train_model(current_step_kpi))
-            training_step_index += 1
             # generating_time *= 1.2
             Logger().debug(f"Evaluated plans: {len(evaluated_plans)}")
             Logger().debug(f"Generated plans number: {len(generated_plans)}")
             Logger().debug(f"KPI: {current_step_kpi}")
+            Logger().debug(f"Kpi threshold: {kpi_thresholds}")
             Logger().debug(f"Max plan lenght: {max([len(plan) for plan in evaluated_plans])}")
-            Logger().debug(f"Plans: {evaluated_plans}")
+            Logger().debug(f"Plans: {[plan for plan in evaluated_plans if len(plan) > training_step_index]}")
+            training_step_index += 1
+            max_plan_length += 1
+            # generating_time += 5
 
     def _train_model(self, kpi: Dict[int, int]) -> DecisionTreeRegressor:
-        X_train, y_train = list(kpi.keys()), list(kpi.values())
+        X_train, y_train = pd.DataFrame(kpi.keys()), pd.Series(kpi.values())
         model = DecisionTreeRegressor(max_depth=5)
-        Logger().debug(X_train)
-        Logger().debug(y_train)
-        model.fit(pd.DataFrame(X_train), pd.Series(y_train))
+        model.fit(X_train, y_train)
+        Logger().debug(f"Score: {model.score(X_train, y_train)}")
         return model
 
     def _calculate_step_kpi(self, training_step_index: int, plans: Set[int]) -> Dict[int, int]:
@@ -72,12 +78,12 @@ class SudokuSolver:
         return kpi
 
     def _is_kpi_detected(self, kpi: Dict[int, int], kpi_threshold: int) -> bool:
-        return True if sum(kpi.values()) >= kpi_threshold else False
+        return True if sum(kpi.values()) > kpi_threshold else False
 
     def _calculate_kpi_threshold(self, kpi: Dict[int, int], bias_coefficient: float = 1.2) -> None:
         non_zero_kpi = [value for value in kpi.values() if value > 0]
         if len(non_zero_kpi) > 0:
-            return np.mean(non_zero_kpi) * bias_coefficient
+            return np.median(non_zero_kpi) * bias_coefficient
         raise Exception("No kpi found.")
 
     def _stochastic_plan_generator(self, models: List[RandomForestClassifier], kpi_thresholds: List[float], processing_time: int, max_plan_len: int, n_cores: int = 1) -> Dict[Tuple[int], int]:
@@ -106,8 +112,8 @@ class SudokuSolver:
                 return plan
             try:
                 step_kpi = models[step].predict(possible_values.reshape(9, 1))
-                if any(step_kpi >= kpi_thresholds[step]):
-                    predicted_steps = possible_values[step_kpi.flatten() >= kpi_thresholds[step]]
+                if any(step_kpi > kpi_thresholds[step]):
+                    predicted_steps = possible_values[step_kpi.flatten() > kpi_thresholds[step]]
                     plan.append(np.random.choice(predicted_steps))
                 else:
                     plan.append(np.random.choice(possible_values))
