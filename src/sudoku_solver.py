@@ -10,14 +10,21 @@ import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.tree import DecisionTreeRegressor
 from tqdm import tqdm
+from tqdm.contrib.concurrent import process_map
 
 from src.logger import Logger
 from src.sudoku import Cell, RuleViolationError, Sudoku
 
-
 class SolvingStage(Enum):
     DATA_COLLECTION = 1
     TRAINING_MODELS = 2
+
+
+def read_plan_log(plan_log_path: str) -> np.ndarray:
+    with open(plan_log_path, "rb") as plan_log:
+        process_plans = np.load(plan_log)
+        process_plans = [process_plans[plan_index] for plan_index in process_plans.files]
+        return process_plans
 
 class SudokuSolver:
     def __init__(self, sudoku: Sudoku) -> None:
@@ -32,14 +39,15 @@ class SudokuSolver:
         start_time = time.time()
         training_step_index = 0
         generating_time = 3
-        max_plan_length = 3
+        max_plan_length = 1
         kpi_thresholds = np.array([])
         models: List[DecisionTreeRegressor] = []
         previous_step_combinations = 9
+        plans_number = 10**4
         N_CORES = os.cpu_count()
         while time.time() - start_time < max_time:
             Logger().debug(f"Epoh: {training_step_index + 1}")
-            self._generate_plans_logs(models=models, kpi_thresholds=kpi_thresholds, processing_time=generating_time, max_plan_len=max_plan_length, n_cores=N_CORES)
+            self._generate_plans_logs(models=models, kpi_thresholds=kpi_thresholds, plans_number=plans_number, max_plan_len=max_plan_length, n_cores=N_CORES)
             generated_plans = self._read_plans_logs(n_cores=N_CORES)
             evaluated_plans = set([self._evaluate_plan(plan, self._sudoku.reset_sudoku()) for plan in tqdm(generated_plans)])
             current_step_kpi = self._calculate_step_kpi(training_step_index, evaluated_plans)
@@ -47,7 +55,7 @@ class SudokuSolver:
             while not self._is_kpi_detected(current_step_kpi, kpi_threshold=0):
                 Logger().debug(f"Kpi is not detected. Collecting more data.")
                 
-                self._generate_plans_logs(models=models, kpi_thresholds=kpi_thresholds, processing_time=generating_time, max_plan_len=max_plan_length, n_cores=N_CORES)
+                self._generate_plans_logs(models=models, kpi_thresholds=kpi_thresholds, plans_number=plans_number, max_plan_len=max_plan_length, n_cores=N_CORES)
                 generated_plans = self._read_plans_logs(n_cores=N_CORES)
                 evaluated_plans = evaluated_plans.union(set([tuple(self._evaluate_plan(plan, self._sudoku.reset_sudoku())) for plan in tqdm(generated_plans)]))
                 current_step_kpi = self._calculate_step_kpi(training_step_index, evaluated_plans)
@@ -68,7 +76,6 @@ class SudokuSolver:
             Logger().debug(f"Plans: {[plan for plan in evaluated_plans if len(plan) > training_step_index]}")
             training_step_index += 1
             max_plan_length += 1
-            generating_time *= np.sqrt(self.combinations / previous_step_combinations)
             previous_step_combinations = self.combinations
 
     def _train_model(self, kpi: Dict[int, int]) -> DecisionTreeRegressor:
@@ -97,22 +104,20 @@ class SudokuSolver:
         raise Exception("No kpi found.")
 
     def _read_plans_logs(self, n_cores: int = 1) -> np.ndarray:
-        plans = set()
-        for core_id in tqdm(range(n_cores)):
-            with open(self._get_plan_log_path(process_id=core_id), "rb") as plan_log:
-                process_plans = np.load(plan_log)
-                process_plans = [tuple(process_plans[plan_index]) for plan_index in process_plans.files]
-                plans.update(process_plans)
-        return np.array(plans)
-
-    def _generate_plans_logs(self, models: List[RandomForestClassifier], kpi_thresholds: List[float], processing_time: int, max_plan_len: int, n_cores: int = 1) -> None:
-        def start_generating_process(possible_values_per_step: Dict[int, List[int]], processing_time: int, process_id: int) -> None:
-            start_time = time.time()
+        log_files = [self._get_plan_log_path(process_id=core_id) for core_id in range(n_cores)]
+        plans = np.array(process_map(read_plan_log, log_files, max_workers=n_cores))
+        plan_length = plans.shape[2]
+        plans_number = plans.shape[0] * plans.shape[1]
+        return plans.reshape(plans_number, plan_length)
+        
+    def _generate_plans_logs(self, models: List[RandomForestClassifier], kpi_thresholds: List[float], plans_number: int, max_plan_len: int, n_cores: int = 1) -> None:
+        def start_generating_process(possible_values_per_step: Dict[int, List[int]], requested_plans_count: int, process_id: int) -> None:
             with open(self._get_plan_log_path(process_id=process_id), mode="wb") as plan_log:
                 plans = []
-                while time.time() - start_time < processing_time:
+                while requested_plans_count > 0:
                     plan = np.array(self._generate_plan(possible_values_per_step=possible_values_per_step, max_plan_len=max_plan_len, sudoku=self._sudoku))
                     plans.append(plan)
+                    requested_plans_count -= 1
                 np.savez(plan_log, *plans)
                 
         def get_possible_values_per_step(models: List[RandomForestClassifier], kpi_thresholds: List[float]) -> Dict[int, List[int]]:
@@ -132,8 +137,9 @@ class SudokuSolver:
         self.combinations = count_combinations(predicted_possible_values_per_step)
         Logger().debug(f"Predicted possible values per step: {predicted_possible_values_per_step}")
         Logger().debug(f"Combinations: {self.combinations}")
+        plans_number_per_process = int(plans_number / n_cores)
         for core in range(n_cores):
-            process = multiprocessing.Process(target=start_generating_process, args=(predicted_possible_values_per_step, processing_time, core))
+            process = multiprocessing.Process(target=start_generating_process, args=(predicted_possible_values_per_step, plans_number_per_process, core))
             processes.append(process)
             process.start()
         [process.join() for process in processes]
@@ -172,4 +178,4 @@ class SudokuSolver:
         except OSError:
             pass 
 
-        return os.path.join(plan_logs_dir, f"plan_log_{process_id}.npz")
+        return os.path.join(plan_logs_dir, f"plan_log_{process_id}.npy")
