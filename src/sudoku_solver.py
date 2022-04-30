@@ -1,3 +1,4 @@
+from configparser import ConfigParser
 from enum import Enum
 import multiprocessing
 import os
@@ -23,23 +24,26 @@ class SudokuSolver:
         self._sudoku = sudoku
         self._epochs = multiprocessing.Value('i', 0)
         self._solving_stage = None
+        self.config = ConfigParser()
+        self.config.read("config.ini")
 
-    def solve_task(self, max_time: int = 1000) -> Sudoku:
+    def solve_task(self, max_time: int = 10**4) -> Sudoku:
         # [6 9 5 1 8 2 5 3 7 2 8 2 1 5 7 7 3 1 8 6 1 7 9 2 1 6 9 7 4 4 5 2 6 3 6 8 3 4 7 1 3 9 5 6]
         start_time = time.time()
         training_step_index = 0
+        generating_time = 10
+        max_plan_length = 1
         kpi_thresholds = np.array([])
         models: List[DecisionTreeRegressor] = []
-        generating_time = 20
-        max_plan_length = 2
+        previous_step_combinations = 9
         while time.time() - start_time < max_time:
             Logger().debug(f"Epoh: {training_step_index + 1}")
             generated_plans = self._stochastic_plan_generator(models=models, kpi_thresholds=kpi_thresholds, processing_time=generating_time, max_plan_len=max_plan_length, n_cores=os.cpu_count())
             evaluated_plans = set([tuple(self._evaluate_plan(plan, self._sudoku.reset_sudoku())) for plan, _ in tqdm(generated_plans.items())])
             current_step_kpi = self._calculate_step_kpi(training_step_index, evaluated_plans)
+            
             while not self._is_kpi_detected(current_step_kpi, kpi_threshold=0):
                 Logger().debug(f"Kpi is not detected. Collecting more data.")
-                # kpi_thresholds *= 0.9
                 generated_plans = self._stochastic_plan_generator(models=models, kpi_thresholds=kpi_thresholds, processing_time=generating_time, max_plan_len=max_plan_length, n_cores=os.cpu_count())
                 evaluated_plans = evaluated_plans.union(set([tuple(self._evaluate_plan(plan, self._sudoku.reset_sudoku())) for plan, _ in tqdm(generated_plans.items())]))
                 current_step_kpi = self._calculate_step_kpi(training_step_index, evaluated_plans)
@@ -47,19 +51,21 @@ class SudokuSolver:
                 Logger().debug(f"Kpi threshold: {kpi_thresholds}")
                 Logger().debug(f"Plans: {[plan for plan in evaluated_plans if len(plan) > training_step_index]}")
 
-            # kpi_thresholds = np.append(kpi_thresholds, self._calculate_kpi_threshold(current_step_kpi, bias_coefficient=0.6))
-            kpi_thresholds = np.append(kpi_thresholds, 0)
+            kpi_thresholds = np.append(kpi_thresholds, self._calculate_kpi_threshold(current_step_kpi, bias_coefficient=0.6))
+            # kpi_thresholds = np.append(kpi_thresholds, 0)
             models.append(self._train_model(current_step_kpi))
-            # generating_time *= 1.2
-            Logger().debug(f"Evaluated plans: {len(evaluated_plans)}")
+
+            Logger().debug(f"Generating time: {generating_time}")
             Logger().debug(f"Generated plans number: {len(generated_plans)}")
+            Logger().debug(f"Evaluated plans: {len(evaluated_plans)}")
             Logger().debug(f"KPI: {current_step_kpi}")
             Logger().debug(f"Kpi threshold: {kpi_thresholds}")
             Logger().debug(f"Max plan lenght: {max([len(plan) for plan in evaluated_plans])}")
             Logger().debug(f"Plans: {[plan for plan in evaluated_plans if len(plan) > training_step_index]}")
             training_step_index += 1
             max_plan_length += 1
-            # generating_time += 5
+            generating_time *= np.sqrt(self.combinations / previous_step_combinations)
+            previous_step_combinations = self.combinations
 
     def _train_model(self, kpi: Dict[int, int]) -> DecisionTreeRegressor:
         X_train, y_train = pd.DataFrame(kpi.keys()), pd.Series(kpi.values())
@@ -86,39 +92,43 @@ class SudokuSolver:
             return np.median(non_zero_kpi) * bias_coefficient
         raise Exception("No kpi found.")
 
-    def _stochastic_plan_generator(self, models: List[RandomForestClassifier], kpi_thresholds: List[float], processing_time: int, max_plan_len: int, n_cores: int = 1) -> Dict[Tuple[int], int]:
-        def start_generating_process(time: int, process_id: int, return_dict: dict) -> List[int]:
+    def _stochastic_plan_generator(self, models: List[RandomForestClassifier], kpi_thresholds: List[float], processing_time: int, max_plan_len: int, n_cores: int = 1) -> None:
+        def start_generating_process(possible_values_per_step: Dict[int, List[int]], processing_time: int, process_id: int) -> None:
             start_time = time.time()
-            while time.time() - start_time < processing_time:
-                plan = tuple(self._generate_plan(models=models, kpi_thresholds=kpi_thresholds, max_plan_len=max_plan_len, sudoku=self._sudoku))
-                return_dict[plan] = return_dict.get(plan, 0) + 1
+            with open(self.get_plan_log_path(process_id=process_id), mode="w") as plan_log:
+                plans = np.array([])
+                while time.time() - start_time < processing_time:
+                    plan = tuple(self._generate_plan(possible_values_per_step=possible_values_per_step, max_plan_len=max_plan_len, sudoku=self._sudoku))
+                    plans = np.append(plans, plan)
+                np.save(plan_log, plans)
+                
+        def get_possible_values_per_step(models: List[RandomForestClassifier], kpi_thresholds: List[float]) -> Dict[int, List[int]]:
+            possible_values_per_step = {}
+            for step, model in enumerate(models):
+                available_values = np.arange(1, 10)
+                steps_kpi = model.predict(available_values.reshape(9, 1))
+                possible_values = available_values[steps_kpi > kpi_thresholds[step]]
+                possible_values_per_step[step] = possible_values
+            return possible_values_per_step
 
-        manager = multiprocessing.Manager()
-        return_dict = manager.dict()  # Key is plan (tuple) and value is counter of generated plans.
         processes = list()
+        predicted_possible_values_per_step = get_possible_values_per_step(models, kpi_thresholds)
+        self.combinations = self._count_combinations(predicted_possible_values_per_step)
+        Logger().debug(f"Predicted possible values per step: {predicted_possible_values_per_step}")
+        Logger().debug(f"Combinations: {self.combinations}")
         for core in range(n_cores):
-            process = multiprocessing.Process(target=start_generating_process, args=(time, core, return_dict))
+            process = multiprocessing.Process(target=start_generating_process, args=(predicted_possible_values_per_step, processing_time, core))
             processes.append(process)
             process.start()
         [process.join() for process in processes]
-        return return_dict
-    
-    def _generate_plan(self, models: List[RandomForestClassifier], kpi_thresholds: List[float], max_plan_len: int, sudoku: Sudoku) -> List[int]:
+
+    def _generate_plan(self, possible_values_per_step: Dict[int, List], max_plan_len: int, sudoku: Sudoku) -> List[int]:
         """Generates plan list which contains numbers in a certain order."""
         plan = list()
         for step, _ in enumerate(sudoku.empty_cells):
-            possible_values = np.arange(1, 10)
-            if step > max_plan_len:
-                return plan
-            try:
-                step_kpi = models[step].predict(possible_values.reshape(9, 1))
-                if any(step_kpi > kpi_thresholds[step]):
-                    predicted_steps = possible_values[step_kpi.flatten() > kpi_thresholds[step]]
-                    plan.append(np.random.choice(predicted_steps))
-                else:
-                    plan.append(np.random.choice(possible_values))
-            except IndexError:
-                plan.append(np.random.choice(possible_values))
+            if step > max_plan_len: return plan
+            step_possible_values = possible_values_per_step.get(step, list(range(1, 10)))
+            plan.append(np.random.choice(step_possible_values))
         return plan
 
     def _evaluate_plan(self, plan: List[int], sudoku: Sudoku) -> List[int]:
@@ -139,4 +149,14 @@ class SudokuSolver:
                 break
         return evaluated_plan
 
+    def _count_combinations(self, possible_values_per_step: Dict[int, List[int]]) -> int:
+        return np.prod([len(step_values) for step_values in possible_values_per_step.values()]) * 9
 
+    def get_plan_log_path(self, process_id: int) -> str:
+        plan_logs_dir = self.config['Paths']['session_dir'] 
+        try:
+            os.makedirs(plan_logs_dir)
+        except OSError:
+            pass 
+
+        return os.path.join(plan_logs_dir, f"plan_log_{process_id}.npy")
