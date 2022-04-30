@@ -8,6 +8,7 @@ from typing import Dict, List, Set, Tuple
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import pairwise_distances
 from sklearn.tree import DecisionTreeRegressor
 from tqdm import tqdm
 from tqdm.contrib.concurrent import process_map
@@ -36,16 +37,15 @@ class SudokuSolver:
 
     def solve_task(self, max_time: int = 10**4) -> Sudoku:
         # [6 9 5 1 8 2 5 3 7 2 8 2 1 5 7 7 3 1 8 6 1 7 9 2 1 6 9 7 4 4 5 2 6 3 6 8 3 4 7 1 3 9 5 6]
-        start_time = time.time()
         training_step_index = 0
-        generating_time = 3
         max_plan_length = 1
-        kpi_thresholds = np.array([])
-        models: List[DecisionTreeRegressor] = []
-        previous_step_combinations = 9
         plans_number = 10**4
         N_CORES = os.cpu_count()
+        start_time = time.time()
+        kpi_thresholds = np.array([])
+        models: List[DecisionTreeRegressor] = []
         while time.time() - start_time < max_time:
+            self._delete_plans_logs(N_CORES)
             Logger().debug(f"Epoh: {training_step_index + 1}")
             self._generate_plans_logs(models=models, kpi_thresholds=kpi_thresholds, plans_number=plans_number, max_plan_len=max_plan_length, n_cores=N_CORES)
             generated_plans = self._read_plans_logs(n_cores=N_CORES)
@@ -54,20 +54,20 @@ class SudokuSolver:
             
             while not self._is_kpi_detected(current_step_kpi, kpi_threshold=0):
                 Logger().debug(f"Kpi is not detected. Collecting more data.")
-                
+
+                self._delete_plans_logs(N_CORES)                
                 self._generate_plans_logs(models=models, kpi_thresholds=kpi_thresholds, plans_number=plans_number, max_plan_len=max_plan_length, n_cores=N_CORES)
                 generated_plans = self._read_plans_logs(n_cores=N_CORES)
                 evaluated_plans = evaluated_plans.union(set([tuple(self._evaluate_plan(plan, self._sudoku.reset_sudoku())) for plan in tqdm(generated_plans)]))
                 current_step_kpi = self._calculate_step_kpi(training_step_index, evaluated_plans)
-                
+
                 Logger().debug(f"Current kpi: {current_step_kpi}")
                 Logger().debug(f"Kpi threshold: {kpi_thresholds}")
                 Logger().debug(f"Plans: {[plan for plan in evaluated_plans if len(plan) > training_step_index]}")
 
-            kpi_thresholds = np.append(kpi_thresholds, self._calculate_kpi_threshold(current_step_kpi, bias_coefficient=0.6))
+            kpi_thresholds = np.append(kpi_thresholds, self._calculate_kpi_threshold(current_step_kpi, bias_coefficient=0.8))
             models.append(self._train_model(current_step_kpi))
 
-            Logger().debug(f"Generating time: {generating_time}")
             Logger().debug(f"Generated plans number: {len(generated_plans)}")
             Logger().debug(f"Evaluated plans: {len(evaluated_plans)}")
             Logger().debug(f"KPI: {current_step_kpi}")
@@ -76,7 +76,6 @@ class SudokuSolver:
             Logger().debug(f"Plans: {[plan for plan in evaluated_plans if len(plan) > training_step_index]}")
             training_step_index += 1
             max_plan_length += 1
-            previous_step_combinations = self.combinations
 
     def _train_model(self, kpi: Dict[int, int]) -> DecisionTreeRegressor:
         X_train, y_train = pd.DataFrame(kpi.keys()), pd.Series(kpi.values())
@@ -179,3 +178,10 @@ class SudokuSolver:
             pass 
 
         return os.path.join(plan_logs_dir, f"plan_log_{process_id}.npy")
+
+    def _delete_plans_logs(self, n_cores: int = 1) -> None:
+        for process_id in range(n_cores):
+            try:
+                os.remove(path=self._get_plan_log_path(process_id))
+            except FileNotFoundError:
+                pass
